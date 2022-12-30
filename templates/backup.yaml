@@ -1,0 +1,113 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: "{{ .Release.Name }}-job"
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    app.kubernetes.io/name: "graph-backup"
+    app.kubernetes.io/component: backup
+spec:
+  schedule: {{.Values.jobSchedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.backoffLimit }}
+      template:
+        metadata:
+        {{- with .Values.podAnnotations }}
+          annotations:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
+          labels:
+            {{-  range $key, $value := .Values.podLabels }}
+            {{ $key }}: "{{ $value }}"
+            {{- end }}
+        spec:
+          {{- if .Values.serviceAccountName }}
+          serviceAccountName: {{ .Values.serviceAccountName }}
+          {{- /* explicitly mount token because some service accounts disable automount-by-default and require explicit opt-in */}}
+          automountServiceAccountToken: true
+          {{- end }}
+          restartPolicy: Never
+          shareProcessNamespace: {{ .Values.shareProcessNamespace }}
+          containers:
+            - name: graph-backup
+              image: {{ .Values.image }}:{{ .Values.imageTag }}
+              imagePullPolicy: Always
+              env:
+                - name: MONGO_ADDR
+                  value: {{ .Values.mongoAddr }}
+                - name: DATABASE
+                  value: {{ .Values.database }}
+                - name: COLLECTION
+                  value: {{ .Values.collection }}
+                - name: CLOUD_PROVIDER
+                  value: {{ .Values.cloudProvider }}
+                - name: BUCKET
+                  value: {{ .Values.bucket }}
+                - name: NAMESPACE
+                  value: {{ .Values.namespace }}
+                - name: HEAP_SIZE
+                  value: {{ .Values.heapSize }}
+                - name: PAGE_CACHE
+                  value: {{ .Values.pageCache }}
+                - name: FALLBACK_TO_FULL
+                  value: "{{ .Values.fallbackToFull }}"
+                - name: CHECK_CONSISTENCY
+                  value: "{{ .Values.checkConsistency }}"
+                - name: CHECK_INDEXES
+                  value: "{{ .Values.checkIndexes }}"
+                - name: CHECK_GRAPH
+                  value: "{{ .Values.checkGraph }}"
+                - name: CHECK_LABEL_SCAN_STORE
+                  value: "{{ .Values.checkLabelScanStore }}"
+                - name: CHECK_PROPERTY_OWNERS
+                  value: "{{ .Values.checkPropertyOwners }}"
+                - name: REMOVE_EXISTING_FILES
+                  value: "{{ .Values.removeExistingFiles }}"
+                - name: REMOVE_BACKUP_FILES
+                  value: "{{ .Values.removeBackupFiles }}"
+              volumeMounts:
+                {{- if .Values.secretName }}
+                - name: credentials
+                  mountPath: /credentials
+                  readOnly: true
+                {{- end }}
+                {{- if .Values.keyName }}
+                - name: pemkey
+                  mountPath: /pemkey
+                  readOnly: true
+                {{- end }}
+                - name: "backup"
+                  mountPath: "/backups"
+                  {{- if .Values.tempVolumeMount }}{{- if .Values.tempVolumeMount.subPath }}
+                  subPath: "{{ .Values.tempVolumeMount.subPath }}"
+                  {{- end }}{{- end }}
+{{- if .Values.sidecarContainers }}
+{{ toYaml .Values.sidecarContainers | indent 12 }}
+{{- end }}
+          volumes:
+            {{- if .Values.secretName }}
+            - name: credentials
+              secret:
+                secretName: "{{ .Values.secretName }}"
+                items:
+                  - key: credentials
+                    path: credentials
+            {{- end }}
+            {{- if .Values.keyName }}
+            - name: pemkey
+              secret:
+                secretName: "{{ .Values.keyName }}"
+                items:
+                  - key: pemkey
+                    path: pemkey
+            {{- end }}
+            - name: "backup"
+{{- with .Values.tempVolume.emptyDir }}
+{{- toYaml . | nindent 14 }}
+{{- end }}
